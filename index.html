@@ -1,0 +1,473 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { RefreshCw, CheckCircle2, AlertCircle, Trash2, PenTool, Send, FileText, Settings } from 'lucide-react';
+
+// ============================================================================
+// CONFIGURATION
+// Replace the URL below with your actual deployed Google Apps Script Web App URL
+// ============================================================================
+const GAS_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbwpPUIRY-9Um1U335kTF7-4Gr3fiXit4lN5uWOC-UZ2F3kK5HvthKeDVrgOMTxpf8ik/exec";
+
+const DEFAULT_DEPARTMENTS = [
+  "Accounting", "Admin", "Admitting", "APE/YAKAP", "Billing", "Cashier", "CSR", "CQI", 
+  "HMO", "HOMES", "General Services", "HR", "IT", "Laboratory", "Medical Record", 
+  "NICU", "NSO", "OH Nurse", "OPD", "OR", "Pharmacy", "Philhealth", "Radiology/Xray", 
+  "Releasing", "Security", "Medical Social Service", "Station 3", "Station 4B", 
+  "Station 5A", "Station 5B", "Training & Development", "Ultrasound"
+];
+
+// --- Signature Pad Component ---
+const SignaturePad = ({ onReady }) => {
+  const canvasRef = useRef(null);
+  const [isDrawing, setIsDrawing] = useState(false);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext('2d');
+    
+    // Set proper canvas resolution
+    const resizeCanvas = () => {
+      const parent = canvas.parentElement;
+      canvas.width = parent.clientWidth;
+      canvas.height = 200; // Fixed height
+      ctx.lineWidth = 2.5;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.strokeStyle = '#0f172a'; // Slate 900
+    };
+
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+
+    // Prevent scrolling when touching the canvas
+    const preventScroll = (e) => {
+      if (e.target === canvas) {
+        e.preventDefault();
+      }
+    };
+    canvas.addEventListener('touchstart', preventScroll, { passive: false });
+    canvas.addEventListener('touchmove', preventScroll, { passive: false });
+
+    // Expose methods to parent
+    onReady({
+      clear: () => {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+      },
+      isEmpty: () => {
+        const blank = document.createElement('canvas');
+        blank.width = canvas.width;
+        blank.height = canvas.height;
+        return canvas.toDataURL() === blank.toDataURL();
+      },
+      getData: () => canvas.toDataURL('image/png')
+    });
+
+    return () => {
+      window.removeEventListener('resize', resizeCanvas);
+      canvas.removeEventListener('touchstart', preventScroll);
+      canvas.removeEventListener('touchmove', preventScroll);
+    };
+  }, [onReady]);
+
+  const startDrawing = (e) => {
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext('2d');
+    const rect = canvas.getBoundingClientRect();
+    
+    // Handle both mouse and touch events
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+    
+    const x = clientX - rect.left;
+    const y = clientY - rect.top;
+
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    setIsDrawing(true);
+  };
+
+  const draw = (e) => {
+    if (!isDrawing) return;
+    
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext('2d');
+    const rect = canvas.getBoundingClientRect();
+    
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+    
+    const x = clientX - rect.left;
+    const y = clientY - rect.top;
+
+    ctx.lineTo(x, y);
+    ctx.stroke();
+  };
+
+  const stopDrawing = () => {
+    setIsDrawing(false);
+  };
+
+  return (
+    <div className="relative w-full border-2 border-slate-300 border-dashed rounded-xl overflow-hidden bg-slate-50 shadow-inner group transition-colors hover:border-teal-400">
+      <div className="absolute top-3 left-3 flex items-center gap-2 text-slate-400 pointer-events-none select-none">
+        <PenTool size={16} />
+        <span className="text-sm font-medium">Sign here</span>
+      </div>
+      <canvas
+        ref={canvasRef}
+        onMouseDown={startDrawing}
+        onMouseMove={draw}
+        onMouseUp={stopDrawing}
+        onMouseOut={stopDrawing}
+        onTouchStart={startDrawing}
+        onTouchMove={draw}
+        onTouchEnd={stopDrawing}
+        className="w-full cursor-crosshair touch-none"
+      />
+      <div className="absolute bottom-4 left-4 right-4 border-t border-slate-300 pointer-events-none opacity-50"></div>
+    </div>
+  );
+};
+
+// --- Main Application Component ---
+export default function App() {
+  const [departments, setDepartments] = useState(DEFAULT_DEPARTMENTS);
+  const [formData, setFormData] = useState({
+    department: '',
+    date: new Date().toLocaleDateString('en-CA'), // Formats to YYYY-MM-DD for the date input
+    title: '',
+    controlNumber: '',
+    receivedByName: ''
+  });
+  
+  const [signaturePadAPI, setSignaturePadAPI] = useState(null);
+  
+  // UI States
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isSuccess, setIsSuccess] = useState(false);
+  const [notification, setNotification] = useState({ show: false, type: '', message: '' });
+
+  const showNotification = (type, message) => {
+    setNotification({ show: true, type, message });
+    setTimeout(() => setNotification({ show: false, type: '', message: '' }), 5000);
+  };
+
+  const handleInputChange = (e) => {
+    const { name, value } = e.target;
+    setFormData(prev => ({ ...prev, [name]: value }));
+  };
+
+  const clearForm = () => {
+    setFormData({
+      department: '',
+      date: new Date().toLocaleDateString('en-CA'),
+      title: '',
+      controlNumber: '',
+      receivedByName: ''
+    });
+    if (signaturePadAPI) {
+      signaturePadAPI.clear();
+    }
+    setIsSuccess(false);
+  };
+
+  const handleSync = async () => {
+    if (GAS_WEB_APP_URL === "YOUR_GOOGLE_APPS_SCRIPT_WEB_APP_URL_HERE") {
+      showNotification('error', 'Please configure the Google Apps Script URL first.');
+      return;
+    }
+
+    setIsSyncing(true);
+    try {
+      const response = await fetch(`${GAS_WEB_APP_URL}?action=getDepartments`);
+      const data = await response.json();
+      
+      if (data.status === 'success' && data.departments && data.departments.length > 0) {
+        setDepartments(data.departments);
+        showNotification('success', 'Departments successfully synced with Google Sheets!');
+      } else {
+        throw new Error('Invalid data structure received');
+      }
+    } catch (error) {
+      console.error('Sync error:', error);
+      showNotification('error', 'Failed to sync. Using default department list.');
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    
+    // Validation
+    if (!formData.department || !formData.date || !formData.title || !formData.receivedByName) {
+      showNotification('error', 'Please fill in all required fields.');
+      return;
+    }
+
+    if (!signaturePadAPI || signaturePadAPI.isEmpty()) {
+      showNotification('error', 'Please provide a signature.');
+      return;
+    }
+
+    if (GAS_WEB_APP_URL === "YOUR_GOOGLE_APPS_SCRIPT_WEB_APP_URL_HERE") {
+      showNotification('error', 'System is not connected to Google Sheets. Setup Required.');
+      return;
+    }
+
+    setIsSubmitting(true);
+    
+    // Prepare Payload
+    const payload = {
+      action: 'submitForm',
+      data: {
+        ...formData,
+        signatureBase64: signaturePadAPI.getData().split(',')[1] // Get base64 without prefix
+      }
+    };
+
+    try {
+      const response = await fetch(GAS_WEB_APP_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(payload)
+      });
+      
+      const result = await response.json();
+      
+      if (result.status === 'success') {
+        setIsSuccess(true);
+      } else {
+        throw new Error(result.message || 'Submission failed');
+      }
+    } catch (error) {
+      console.error('Submit error:', error);
+      showNotification('error', 'Failed to submit data. Please try again.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // --- Success Screen UI ---
+  if (isSuccess) {
+    return (
+      <div className="min-h-screen bg-slate-50 py-12 px-4 sm:px-6 lg:px-8 font-sans flex items-center justify-center">
+        <div className="max-w-md w-full bg-white shadow-xl shadow-teal-100/50 rounded-2xl p-8 text-center border border-teal-50">
+          <div className="w-20 h-20 bg-teal-100 rounded-full flex items-center justify-center mx-auto mb-6">
+            <CheckCircle2 size={40} className="text-teal-600" />
+          </div>
+          <h2 className="text-3xl font-bold text-slate-800 mb-2">Thank You!</h2>
+          <p className="text-slate-500 mb-8">The document has been successfully recorded and the signature has been securely saved to the TDMH system.</p>
+          <button
+            onClick={clearForm}
+            className="w-full bg-teal-600 hover:bg-teal-700 text-white font-bold py-3 px-6 rounded-xl transition-all shadow-md hover:shadow-lg active:scale-95 flex items-center justify-center gap-2"
+          >
+            <FileText size={20} />
+            Record Another Document
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // --- Main Form UI ---
+  return (
+    <div className="min-h-screen bg-slate-50 py-8 px-4 sm:px-6 lg:px-8 font-sans">
+      <div className="max-w-2xl mx-auto">
+        
+        {/* Header Section */}
+        <div className="bg-white rounded-t-2xl shadow-sm border-b border-slate-200 p-8 flex flex-col items-center relative">
+          
+          <button 
+            onClick={handleSync}
+            disabled={isSyncing}
+            className={`absolute top-4 right-4 flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+              isSyncing 
+                ? 'bg-teal-50 text-teal-400 cursor-not-allowed' 
+                : 'bg-teal-50 text-teal-700 hover:bg-teal-100 shadow-sm active:scale-95'
+            }`}
+            title="Sync Departments from Sheets"
+          >
+            <RefreshCw size={14} className={isSyncing ? 'animate-spin' : ''} />
+            {isSyncing ? 'Syncing...' : 'Sync'}
+          </button>
+
+          <img 
+            src="./images/tdmh-logo.png" 
+            alt="TDMH Logo" 
+            className="h-24 w-auto mb-4 object-contain"
+            onError={(e) => { 
+              // Fallback placeholder just in case image doesn't load in preview
+              e.target.onerror = null; 
+              e.target.src = 'https://via.placeholder.com/150x80/0f766e/ffffff?text=TDMH+Logo'; 
+            }} 
+          />
+          <h1 className="text-2xl sm:text-3xl font-bold text-slate-800 text-center">CQI's Receiving Record</h1>
+          <h2 className="text-sm font-bold text-teal-600 mt-1 uppercase tracking-widest text-center">Continuous Quality Improvement</h2>
+          
+          <p className="text-sm text-slate-500 mt-5 text-center max-w-md">
+            Please fill out the details below and sign to acknowledge receipt.
+          </p>
+        </div>
+
+        {/* Notification Banner */}
+        {notification.show && (
+          <div className={`p-4 flex items-center justify-center gap-3 border-x border-b ${
+            notification.type === 'success' ? 'bg-teal-50 text-teal-800 border-teal-200' : 'bg-red-50 text-red-800 border-red-200'
+          }`}>
+            {notification.type === 'success' ? <CheckCircle2 size={20} className="text-teal-600" /> : <AlertCircle size={20} className="text-red-600" />}
+            <span className="text-sm font-medium">{notification.message}</span>
+          </div>
+        )}
+
+        {/* Form Section */}
+        <div className="bg-white shadow-xl shadow-slate-200/50 rounded-b-2xl p-6 sm:p-8">
+          <form onSubmit={handleSubmit} className="space-y-6">
+            
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Department */}
+              <div className="space-y-2">
+                <label className="text-sm font-bold text-slate-700 block">
+                  Department <span className="text-red-500">*</span>
+                </label>
+                <select
+                  name="department"
+                  value={formData.department}
+                  onChange={handleInputChange}
+                  required
+                  className="w-full bg-slate-50 border border-slate-300 text-slate-900 text-sm rounded-lg focus:ring-teal-500 focus:border-teal-500 block p-3 transition-colors"
+                >
+                  <option value="" disabled>Select Department</option>
+                  {departments.map((dept, index) => (
+                    <option key={index} value={dept}>{dept}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Date (Read Only) */}
+              <div className="space-y-2">
+                <label className="text-sm font-bold text-slate-700 block">
+                  Date <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="date"
+                  name="date"
+                  value={formData.date}
+                  readOnly
+                  className="w-full bg-slate-100 border border-slate-200 text-slate-500 text-sm rounded-lg block p-3 cursor-not-allowed select-none"
+                  title="Date is automatically set to today"
+                />
+              </div>
+            </div>
+
+            {/* Title of Document */}
+            <div className="space-y-2">
+              <label className="text-sm font-bold text-slate-700 block">
+                Title of Document/s <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="text"
+                name="title"
+                value={formData.title}
+                onChange={handleInputChange}
+                required
+                placeholder="e.g. Monthly Audit Report"
+                className="w-full bg-slate-50 border border-slate-300 text-slate-900 text-sm rounded-lg focus:ring-teal-500 focus:border-teal-500 block p-3 transition-colors placeholder-slate-400"
+              />
+            </div>
+
+            {/* Control Number */}
+            <div className="space-y-2">
+              <label className="text-sm font-bold text-slate-700 block">
+                Control Number of Form/s <span className="text-slate-400 font-normal">(Optional)</span>
+              </label>
+              <input
+                type="text"
+                name="controlNumber"
+                value={formData.controlNumber}
+                onChange={handleInputChange}
+                placeholder="e.g. TDMH-CQI-F-001-4-0"
+                className="w-full bg-slate-50 border border-slate-300 text-slate-900 text-sm rounded-lg focus:ring-teal-500 focus:border-teal-500 block p-3 transition-colors placeholder-slate-400 uppercase"
+              />
+            </div>
+
+            <hr className="border-slate-100 my-8" />
+
+            {/* Signature Area */}
+            <div className="space-y-4 bg-teal-50/40 p-6 rounded-xl border border-teal-100">
+              <h3 className="text-lg font-bold text-teal-900 flex items-center gap-2">
+                Receiver Details
+              </h3>
+              
+              <div className="space-y-2 pt-2">
+                <label className="text-sm font-bold text-slate-700 flex justify-between items-end">
+                  <span>Signature <span className="text-red-500">*</span></span>
+                  <button
+                    type="button"
+                    onClick={() => signaturePadAPI && signaturePadAPI.clear()}
+                    className="text-xs flex items-center gap-1 text-slate-500 hover:text-red-600 transition-colors"
+                  >
+                    <Trash2 size={12} /> Clear Pad
+                  </button>
+                </label>
+                <SignaturePad onReady={setSignaturePadAPI} />
+              </div>
+
+              <div className="space-y-2 pt-2">
+                <label className="text-sm font-bold text-slate-700 block">
+                  Received by (Full Name) <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  name="receivedByName"
+                  value={formData.receivedByName}
+                  onChange={handleInputChange}
+                  required
+                  placeholder="Type full name of the receiver..."
+                  className="w-full bg-white border border-slate-300 text-slate-900 text-sm rounded-lg focus:ring-teal-500 focus:border-teal-500 block p-3 transition-colors placeholder-slate-400 font-medium"
+                />
+              </div>
+            </div>
+
+            {/* Submit Button */}
+            <div className="pt-4 flex gap-4">
+              <button
+                type="button"
+                onClick={clearForm}
+                className="px-6 py-3 rounded-xl font-bold text-slate-500 bg-slate-100 hover:bg-slate-200 hover:text-slate-700 transition-all"
+              >
+                Reset
+              </button>
+              <button
+                type="submit"
+                disabled={isSubmitting}
+                className={`flex-1 flex items-center justify-center gap-2 px-6 py-3 rounded-xl font-bold text-white transition-all ${
+                  isSubmitting 
+                    ? 'bg-teal-400 cursor-not-allowed' 
+                    : 'bg-teal-600 hover:bg-teal-700 shadow-md hover:shadow-lg active:scale-[0.98]'
+                }`}
+              >
+                {isSubmitting ? (
+                  <>
+                    <RefreshCw size={20} className="animate-spin" />
+                    Processing...
+                  </>
+                ) : (
+                  <>
+                    <Send size={20} />
+                    Submit Record
+                  </>
+                )}
+              </button>
+            </div>
+          </form>
+        </div>
+        
+        <p className="text-center text-xs text-slate-400 mt-6 font-medium">
+          Securely Integrated with TDMH Workspace
+        </p>
+
+      </div>
+    </div>
+  );
+}
