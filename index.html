@@ -18,13 +18,20 @@
     <style>
         /* Prevents pull-to-refresh on mobile devices when signing */
         body { overscroll-behavior-y: contain; }
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+        }
+        .medical-gradient {
+            background: linear-gradient(135deg, #0f766e 0%, #0369a1 100%);
+        }
     </style>
 </head>
-<body class="bg-slate-50">
+<body class="bg-slate-100 min-h-screen">
     <div id="root"></div>
 
     <script type="text/babel">
-        const { useState, useEffect, useRef } = React;
+        const { useState, useEffect, useRef, useCallback } = React;
 
         // --- SVG Icons Components ---
         const IconRefresh = ({ className, size = 24 }) => <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>;
@@ -34,6 +41,7 @@
         const IconPen = ({ className, size = 24 }) => <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/><path d="M2 2l7.586 7.586"/><circle cx="11" cy="11" r="2"/></svg>;
         const IconSend = ({ className, size = 24 }) => <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>;
         const IconFileText = ({ className, size = 24 }) => <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></svg>;
+        const IconCamera = ({ className, size = 24 }) => <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></svg>;
 
         // ============================================================================
         // CONFIGURATION: PASTE YOUR GOOGLE APPS SCRIPT URL HERE
@@ -41,8 +49,130 @@
         const GAS_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbwpPUIRY-9Um1U335kTF7-4Gr3fiXit4lN5uWOC-UZ2F3kK5HvthKeDVrgOMTxpf8ik/exec";
 
         const DEFAULT_DEPARTMENTS = [
-            "Accounting", "Admin", "Admitting", "CQI", "HR", "IT" // Fallback list
+            "Accounting", "Admin", "Admitting", "APE/YAKAP", "Billing", "Cashier", 
+            "CSR", "CQI", "ER", "HMO Claims", "HMO OPD", "HOMES", "General Services", 
+            "HR", "IT", "Laboratory", "Medical Record", "NICU", "NSO", "OH Nurse", 
+            "OPD", "OR", "Pharmacy", "PhilHealth", "Radiology/XRay", "Releasing", 
+            "Security", "Medical Social Service", "Station 3", "Station 4B", 
+            "Station 5A", "Station 5B", "Training & Development", "Ultrasound"
         ];
+
+        // --- Camera Component ---
+        const CameraCapture = ({ onCapture, onClear, photo }) => {
+            const videoRef = useRef(null);
+            const canvasRef = useRef(null);
+            const [stream, setStream] = useState(null);
+            const [isCameraActive, setIsCameraActive] = useState(false);
+            const [error, setError] = useState('');
+
+            const startCamera = async () => {
+                try {
+                    setError('');
+                    const mediaStream = await navigator.mediaDevices.getUserMedia({ 
+                        video: { facingMode: "environment" } // Prefer back camera on mobile
+                    });
+                    setStream(mediaStream);
+                    if (videoRef.current) {
+                        videoRef.current.srcObject = mediaStream;
+                    }
+                    setIsCameraActive(true);
+                } catch (err) {
+                    setError('Camera access denied or unavailable.');
+                    console.error("Camera error:", err);
+                }
+            };
+
+            const stopCamera = useCallback(() => {
+                if (stream) {
+                    stream.getTracks().forEach(track => track.stop());
+                    setStream(null);
+                }
+                setIsCameraActive(false);
+            }, [stream]);
+
+            const takePhoto = () => {
+                if (videoRef.current && canvasRef.current) {
+                    const video = videoRef.current;
+                    const canvas = canvasRef.current;
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                    
+                    // Compress image slightly to reduce payload size
+                    const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+                    onCapture(dataUrl);
+                    stopCamera();
+                }
+            };
+
+            // Cleanup on unmount
+            useEffect(() => {
+                return () => {
+                    if (stream) {
+                        stream.getTracks().forEach(track => track.stop());
+                    }
+                };
+            }, [stream]);
+
+            if (photo) {
+                return (
+                    <div className="relative w-full rounded-xl overflow-hidden border-2 border-slate-200">
+                        <img src={photo} alt="Captured selfie" className="w-full h-48 object-cover" />
+                        <button 
+                            type="button" 
+                            onClick={onClear}
+                            className="absolute top-2 right-2 bg-red-600 text-white p-2 rounded-full shadow-lg hover:bg-red-700 transition"
+                        >
+                            <IconTrash size={16} />
+                        </button>
+                    </div>
+                );
+            }
+
+            return (
+                <div className="w-full">
+                    {!isCameraActive ? (
+                        <button 
+                            type="button" 
+                            onClick={startCamera}
+                            className="w-full py-8 border-2 border-dashed border-teal-300 rounded-xl bg-teal-50 text-teal-700 hover:bg-teal-100 transition flex flex-col items-center justify-center gap-2"
+                        >
+                            <IconCamera size={32} />
+                            <span className="font-medium">Tap to open camera and take a photo of receiver with document</span>
+                        </button>
+                    ) : (
+                        <div className="relative w-full rounded-xl overflow-hidden bg-black flex flex-col">
+                            <video 
+                                ref={videoRef} 
+                                autoPlay 
+                                playsInline 
+                                className="w-full h-64 object-cover"
+                            ></video>
+                            <canvas ref={canvasRef} className="hidden"></canvas>
+                            
+                            <div className="absolute bottom-0 inset-x-0 p-4 bg-gradient-to-t from-black/80 to-transparent flex justify-center gap-4">
+                                <button 
+                                    type="button" 
+                                    onClick={stopCamera}
+                                    className="px-4 py-2 bg-slate-600 text-white rounded-lg font-medium hover:bg-slate-700 transition"
+                                >
+                                    Cancel
+                                </button>
+                                <button 
+                                    type="button" 
+                                    onClick={takePhoto}
+                                    className="px-6 py-2 bg-teal-500 text-white rounded-lg font-bold hover:bg-teal-400 transition shadow-lg"
+                                >
+                                    Capture Photo
+                                </button>
+                            </div>
+                        </div>
+                    )}
+                    {error && <p className="text-red-500 text-sm mt-2 font-medium">{error}</p>}
+                </div>
+            );
+        };
 
         // --- Signature Pad Component ---
         const SignaturePad = ({ onReady }) => {
@@ -80,6 +210,7 @@
                         blank.height = canvas.height;
                         return canvas.toDataURL() === blank.toDataURL();
                     },
+                    // Return the full data URL, directly saveable as a text string
                     getData: () => canvas.toDataURL('image/png')
                 });
 
@@ -117,10 +248,10 @@
             const stopDrawing = () => setIsDrawing(false);
 
             return (
-                <div className="relative w-full border-2 border-slate-300 border-dashed rounded-xl overflow-hidden bg-slate-50 shadow-inner hover:border-teal-400 transition-colors">
-                    <div className="absolute top-3 left-3 flex items-center gap-2 text-slate-400 pointer-events-none select-none">
+                <div className="relative w-full border-2 border-slate-300 border-dashed rounded-xl overflow-hidden bg-white shadow-inner hover:border-teal-400 transition-colors">
+                    <div className="absolute top-3 left-3 flex items-center gap-2 text-slate-300 pointer-events-none select-none">
                         <IconPen size={16} />
-                        <span className="text-sm font-medium">Sign here</span>
+                        <span className="text-sm font-medium">Sign here directly</span>
                     </div>
                     <canvas
                         ref={canvasRef}
@@ -133,7 +264,7 @@
                         onTouchEnd={stopDrawing}
                         className="w-full cursor-crosshair touch-none"
                     />
-                    <div className="absolute bottom-4 left-4 right-4 border-t border-slate-300 pointer-events-none opacity-50"></div>
+                    <div className="absolute bottom-4 left-4 right-4 border-t border-slate-200 pointer-events-none opacity-50"></div>
                 </div>
             );
         };
@@ -150,17 +281,14 @@
             });
             
             const [signaturePadAPI, setSignaturePadAPI] = useState(null);
+            const [capturedPhoto, setCapturedPhoto] = useState(null);
+            
             const [isSyncing, setIsSyncing] = useState(false);
             const [isSubmitting, setIsSubmitting] = useState(false);
             const [isSuccess, setIsSuccess] = useState(false);
             const [notification, setNotification] = useState({ show: false, type: '', message: '' });
 
-            // Auto-sync on load
-            useEffect(() => {
-                if (GAS_WEB_APP_URL !== "YOUR_GOOGLE_APPS_SCRIPT_WEB_APP_URL_HERE") {
-                    handleSync();
-                }
-            }, []);
+            // Removed the auto-sync useEffect as requested. 
 
             const showNotification = (type, message) => {
                 setNotification({ show: true, type, message });
@@ -181,11 +309,15 @@
                     receivedByName: ''
                 });
                 if (signaturePadAPI) signaturePadAPI.clear();
+                setCapturedPhoto(null);
                 setIsSuccess(false);
             };
 
             const handleSync = async () => {
-                if (GAS_WEB_APP_URL === "YOUR_GOOGLE_APPS_SCRIPT_WEB_APP_URL_HERE") return;
+                if (GAS_WEB_APP_URL === "YOUR_GOOGLE_APPS_SCRIPT_WEB_APP_URL_HERE") {
+                    showNotification('error', 'Please configure the Google Apps Script URL first.');
+                    return;
+                }
                 setIsSyncing(true);
                 try {
                     const response = await fetch(`${GAS_WEB_APP_URL}?action=getDepartments`);
@@ -193,9 +325,12 @@
                     if (data.status === 'success' && data.departments && data.departments.length > 0) {
                         setDepartments(data.departments);
                         showNotification('success', 'Departments updated from Sheets!');
+                    } else {
+                        throw new Error('No departments found');
                     }
                 } catch (error) {
                     console.error('Sync error:', error);
+                    showNotification('error', 'Failed to sync. Please ensure Setup is run on Sheets.');
                 } finally {
                     setIsSyncing(false);
                 }
@@ -214,6 +349,11 @@
                     return;
                 }
 
+                if (!capturedPhoto) {
+                    showNotification('error', 'Please take a photo of the receiver with the document.');
+                    return;
+                }
+
                 if (GAS_WEB_APP_URL === "YOUR_GOOGLE_APPS_SCRIPT_WEB_APP_URL_HERE") {
                     showNotification('error', 'System is not connected to Google Sheets. Setup Required.');
                     return;
@@ -225,7 +365,9 @@
                     action: 'submitForm',
                     data: {
                         ...formData,
-                        signatureBase64: signaturePadAPI.getData().split(',')[1]
+                        // Send the direct data strings
+                        signatureData: signaturePadAPI.getData(),
+                        selfieBase64: capturedPhoto.split(',')[1] // Strip prefix for Apps Script decoding
                     }
                 };
 
@@ -253,16 +395,16 @@
 
             if (isSuccess) {
                 return (
-                    <div className="min-h-screen flex items-center justify-center p-4">
-                        <div className="max-w-md w-full bg-white shadow-xl shadow-teal-100/50 rounded-2xl p-8 text-center border border-teal-50">
-                            <div className="w-20 h-20 bg-teal-100 rounded-full flex items-center justify-center mx-auto mb-6">
-                                <IconCheckCircle size={40} className="text-teal-600" />
+                    <div className="min-h-screen flex items-center justify-center p-4 bg-slate-100 medical-gradient">
+                        <div className="max-w-md w-full glass-panel shadow-2xl rounded-3xl p-10 text-center border border-white/40">
+                            <div className="w-24 h-24 bg-teal-100 rounded-full flex items-center justify-center mx-auto mb-6 shadow-inner">
+                                <IconCheckCircle size={48} className="text-teal-600" />
                             </div>
-                            <h2 className="text-3xl font-bold text-slate-800 mb-2">Thank You!</h2>
-                            <p className="text-slate-500 mb-8">The document has been successfully recorded and the signature has been securely saved to the TDMH system.</p>
-                            <button onClick={clearForm} className="w-full bg-teal-600 hover:bg-teal-700 text-white font-bold py-3 px-6 rounded-xl transition-all shadow-md active:scale-95 flex items-center justify-center gap-2">
+                            <h2 className="text-3xl font-bold text-slate-800 mb-3">Record Secured</h2>
+                            <p className="text-slate-600 mb-8 font-medium">The document details, signature, and photo have been securely transmitted to the TDMH logbook.</p>
+                            <button onClick={clearForm} className="w-full bg-teal-600 hover:bg-teal-700 text-white font-bold py-4 px-6 rounded-xl transition-all shadow-lg hover:shadow-xl active:scale-95 flex items-center justify-center gap-2">
                                 <IconFileText size={20} />
-                                Record Another Document
+                                Log Next Document
                             </button>
                         </div>
                     </div>
@@ -270,92 +412,137 @@
             }
 
             return (
-                <div className="py-8 px-4 sm:px-6 lg:px-8 max-w-2xl mx-auto">
+                <div className="pb-12 pt-6 px-4 sm:px-6 lg:px-8 max-w-3xl mx-auto">
                     
-                    {/* Header */}
-                    <div className="bg-white rounded-t-2xl shadow-sm border-b border-slate-200 p-8 flex flex-col items-center relative">
-                        <button onClick={handleSync} disabled={isSyncing} className={`absolute top-4 right-4 flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${isSyncing ? 'bg-teal-50 text-teal-400 cursor-not-allowed' : 'bg-teal-50 text-teal-700 hover:bg-teal-100 shadow-sm active:scale-95'}`}>
-                            <IconRefresh size={14} className={isSyncing ? 'animate-spin' : ''} />
-                            {isSyncing ? 'Syncing...' : 'Sync'}
-                        </button>
+                    {/* Floating Header Card */}
+                    <div className="medical-gradient rounded-3xl shadow-xl p-8 flex flex-col items-center relative overflow-hidden mb-6 border border-teal-800">
+                        {/* Sync Button & Note Container */}
+                        <div className="absolute top-4 right-4 flex flex-col items-end">
+                            <button 
+                                onClick={handleSync} 
+                                disabled={isSyncing} 
+                                className={`flex items-center gap-2 px-4 py-2 rounded-full text-xs font-bold transition-all shadow-md ${isSyncing ? 'bg-teal-900 text-teal-300 cursor-not-allowed' : 'bg-white text-teal-800 hover:bg-teal-50 active:scale-95'}`}
+                            >
+                                <IconRefresh size={14} className={isSyncing ? 'animate-spin' : ''} />
+                                {isSyncing ? 'Syncing...' : 'Sync Data'}
+                            </button>
+                            <span className="text-[10px] text-teal-100 font-medium mt-1 pr-1 opacity-80">
+                                Click to fetch Departments
+                            </span>
+                        </div>
 
-                        <img 
-                            src="./images/tdmh-logo.png" 
-                            alt="TDMH Logo" 
-                            className="h-24 w-auto mb-4 object-contain"
-                            onError={(e) => { 
-                                e.target.onerror = null; 
-                                e.target.src = 'https://via.placeholder.com/150x80/0f766e/ffffff?text=TDMH+Logo'; 
-                            }} 
-                        />
-                        <h1 className="text-2xl sm:text-3xl font-bold text-slate-800 text-center">CQI's Receiving Record</h1>
-                        <h2 className="text-sm font-bold text-teal-600 mt-1 uppercase tracking-widest text-center">Continuous Quality Improvement</h2>
-                        <p className="text-sm text-slate-500 mt-5 text-center max-w-md">Please fill out the details below and sign to acknowledge receipt.</p>
+                        <div className="bg-white p-3 rounded-2xl shadow-sm mb-4">
+                            <img 
+                                src="./images logo/tdmh-logo.png" 
+                                alt="TDMH Logo" 
+                                className="h-16 w-auto object-contain"
+                                onError={(e) => { 
+                                    e.target.onerror = null; 
+                                    e.target.src = 'https://via.placeholder.com/150x80/0f766e/ffffff?text=TDMH+Logo'; 
+                                }} 
+                            />
+                        </div>
+                        <h1 className="text-2xl sm:text-4xl font-extrabold text-white text-center tracking-tight drop-shadow-sm">CQI's Receiving Record</h1>
+                        <h2 className="text-xs sm:text-sm font-bold text-teal-100 mt-2 uppercase tracking-[0.2em] text-center">Continuous Quality Improvement</h2>
                     </div>
 
                     {/* Notifications */}
                     {notification.show && (
-                        <div className={`p-4 flex items-center justify-center gap-3 border-x border-b ${notification.type === 'success' ? 'bg-teal-50 text-teal-800 border-teal-200' : 'bg-red-50 text-red-800 border-red-200'}`}>
-                            {notification.type === 'success' ? <IconCheckCircle size={20} className="text-teal-600" /> : <IconAlertCircle size={20} className="text-red-600" />}
-                            <span className="text-sm font-medium">{notification.message}</span>
+                        <div className={`mb-6 p-4 rounded-xl flex items-center justify-center gap-3 shadow-md ${notification.type === 'success' ? 'bg-green-100 text-green-800 border border-green-200' : 'bg-red-100 text-red-800 border border-red-200'}`}>
+                            {notification.type === 'success' ? <IconCheckCircle size={20} className="text-green-600" /> : <IconAlertCircle size={20} className="text-red-600" />}
+                            <span className="text-sm font-bold">{notification.message}</span>
                         </div>
                     )}
 
-                    {/* Form */}
-                    <div className="bg-white shadow-xl shadow-slate-200/50 rounded-b-2xl p-6 sm:p-8">
-                        <form onSubmit={handleSubmit} className="space-y-6">
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                <div className="space-y-2">
-                                    <label className="text-sm font-bold text-slate-700 block">Department <span className="text-red-500">*</span></label>
-                                    <select name="department" value={formData.department} onChange={handleInputChange} required className="w-full bg-slate-50 border border-slate-300 text-slate-900 text-sm rounded-lg focus:ring-teal-500 focus:border-teal-500 block p-3">
-                                        <option value="" disabled>Select Department</option>
-                                        {departments.map((dept, i) => <option key={i} value={dept}>{dept}</option>)}
-                                    </select>
+                    {/* Main Form Card */}
+                    <div className="bg-white shadow-2xl shadow-teal-900/10 rounded-3xl p-6 sm:p-10 border border-slate-100">
+                        <form onSubmit={handleSubmit} className="space-y-8">
+                            
+                            {/* Section 1: Document Details */}
+                            <div>
+                                <h3 className="text-lg font-bold text-teal-800 mb-4 border-b border-teal-100 pb-2 flex items-center gap-2">
+                                    <IconFileText size={20}/> Document Information
+                                </h3>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                                    <div className="space-y-2">
+                                        <label className="text-sm font-bold text-slate-700 block">Department <span className="text-red-500">*</span></label>
+                                        <select name="department" value={formData.department} onChange={handleInputChange} required className="w-full bg-slate-50 border-2 border-slate-200 text-slate-900 text-sm rounded-xl focus:ring-0 focus:border-teal-500 block p-3.5 transition-colors font-medium">
+                                            <option value="" disabled>Select Department</option>
+                                            {departments.map((dept, i) => <option key={i} value={dept}>{dept}</option>)}
+                                        </select>
+                                    </div>
+                                    <div className="space-y-2">
+                                        <label className="text-sm font-bold text-slate-700 block">Date <span className="text-red-500">*</span></label>
+                                        <input type="date" name="date" value={formData.date} readOnly className="w-full bg-slate-100 border-2 border-slate-200 text-slate-500 text-sm rounded-xl block p-3.5 cursor-not-allowed select-none font-medium" />
+                                    </div>
                                 </div>
-                                <div className="space-y-2">
-                                    <label className="text-sm font-bold text-slate-700 block">Date <span className="text-red-500">*</span></label>
-                                    <input type="date" name="date" value={formData.date} readOnly className="w-full bg-slate-100 border border-slate-200 text-slate-500 text-sm rounded-lg block p-3 cursor-not-allowed select-none" />
-                                </div>
-                            </div>
 
-                            <div className="space-y-2">
-                                <label className="text-sm font-bold text-slate-700 block">Title of Document/s <span className="text-red-500">*</span></label>
-                                <input type="text" name="title" value={formData.title} onChange={handleInputChange} required placeholder="e.g. Monthly Audit Report" className="w-full bg-slate-50 border border-slate-300 text-slate-900 text-sm rounded-lg focus:ring-teal-500 focus:border-teal-500 block p-3" />
-                            </div>
+                                <div className="space-y-6">
+                                    <div className="space-y-2">
+                                        <label className="text-sm font-bold text-slate-700 block">Title of Document/s <span className="text-red-500">*</span></label>
+                                        <input type="text" name="title" value={formData.title} onChange={handleInputChange} required placeholder="e.g. Monthly Audit Report" className="w-full bg-slate-50 border-2 border-slate-200 text-slate-900 text-sm rounded-xl focus:ring-0 focus:border-teal-500 block p-3.5 transition-colors font-medium placeholder-slate-400" />
+                                    </div>
 
-                            <div className="space-y-2">
-                                <label className="text-sm font-bold text-slate-700 block">Control Number of Form/s <span className="text-slate-400 font-normal">(Optional)</span></label>
-                                <input type="text" name="controlNumber" value={formData.controlNumber} onChange={handleInputChange} placeholder="e.g. TDMH-CQI-F-001-4-0" className="w-full bg-slate-50 border border-slate-300 text-slate-900 text-sm rounded-lg focus:ring-teal-500 focus:border-teal-500 block p-3 uppercase" />
-                            </div>
-
-                            <hr className="border-slate-100 my-8" />
-
-                            <div className="space-y-4 bg-teal-50/40 p-6 rounded-xl border border-teal-100">
-                                <h3 className="text-lg font-bold text-teal-900 flex items-center gap-2">Receiver Details</h3>
-                                <div className="space-y-2 pt-2">
-                                    <label className="text-sm font-bold text-slate-700 flex justify-between items-end">
-                                        <span>Signature <span className="text-red-500">*</span></span>
-                                        <button type="button" onClick={() => signaturePadAPI && signaturePadAPI.clear()} className="text-xs flex items-center gap-1 text-slate-500 hover:text-red-600 transition-colors">
-                                            <IconTrash size={12} /> Clear Pad
-                                        </button>
-                                    </label>
-                                    <SignaturePad onReady={setSignaturePadAPI} />
-                                </div>
-                                <div className="space-y-2 pt-2">
-                                    <label className="text-sm font-bold text-slate-700 block">Received by (Full Name) <span className="text-red-500">*</span></label>
-                                    <input type="text" name="receivedByName" value={formData.receivedByName} onChange={handleInputChange} required placeholder="Type full name..." className="w-full bg-white border border-slate-300 text-slate-900 text-sm rounded-lg focus:ring-teal-500 focus:border-teal-500 block p-3 font-medium" />
+                                    <div className="space-y-2">
+                                        <label className="text-sm font-bold text-slate-700 block">Control Number of Form/s <span className="text-slate-400 font-normal">(Optional)</span></label>
+                                        <input type="text" name="controlNumber" value={formData.controlNumber} onChange={handleInputChange} placeholder="e.g. TDMH-CQI-F-001-4-0" className="w-full bg-slate-50 border-2 border-slate-200 text-slate-900 text-sm rounded-xl focus:ring-0 focus:border-teal-500 block p-3.5 transition-colors font-medium placeholder-slate-400 uppercase" />
+                                    </div>
                                 </div>
                             </div>
 
-                            <div className="pt-4 flex gap-4">
-                                <button type="button" onClick={clearForm} className="px-6 py-3 rounded-xl font-bold text-slate-500 bg-slate-100 hover:bg-slate-200 transition-all">Reset</button>
-                                <button type="submit" disabled={isSubmitting} className={`flex-1 flex items-center justify-center gap-2 px-6 py-3 rounded-xl font-bold text-white transition-all ${isSubmitting ? 'bg-teal-400 cursor-not-allowed' : 'bg-teal-600 hover:bg-teal-700 shadow-md active:scale-[0.98]'}`}>
-                                    {isSubmitting ? <><IconRefresh size={20} className="animate-spin" /> Processing...</> : <><IconSend size={20} /> Submit Record</>}
+                            {/* Section 2: Receiver Identity */}
+                            <div className="bg-slate-50 p-6 rounded-2xl border border-slate-200">
+                                <h3 className="text-lg font-bold text-teal-800 mb-4 border-b border-teal-100 pb-2 flex items-center gap-2">
+                                    <IconCamera size={20}/> Proof of Receipt
+                                </h3>
+                                
+                                <div className="space-y-6">
+                                    <div className="space-y-2">
+                                        <label className="text-sm font-bold text-slate-700 block">Received by (Full Name) <span className="text-red-500">*</span></label>
+                                        <input type="text" name="receivedByName" value={formData.receivedByName} onChange={handleInputChange} required placeholder="Type full name of the receiver..." className="w-full bg-white border-2 border-slate-200 text-slate-900 text-sm rounded-xl focus:ring-0 focus:border-teal-500 block p-3.5 transition-colors font-bold placeholder-slate-400" />
+                                    </div>
+
+                                    {/* Camera Feature */}
+                                    <div className="space-y-2">
+                                        <label className="text-sm font-bold text-slate-700 block">Receiver Photo Verification <span className="text-red-500">*</span></label>
+                                        <CameraCapture 
+                                            onCapture={setCapturedPhoto} 
+                                            onClear={() => setCapturedPhoto(null)} 
+                                            photo={capturedPhoto} 
+                                        />
+                                    </div>
+
+                                    {/* Direct Signature */}
+                                    <div className="space-y-2">
+                                        <label className="text-sm font-bold text-slate-700 flex justify-between items-end">
+                                            <span>Digital Signature <span className="text-red-500">*</span></span>
+                                            <button type="button" onClick={() => signaturePadAPI && signaturePadAPI.clear()} className="text-xs flex items-center gap-1 text-slate-500 hover:text-red-600 transition-colors font-bold bg-white px-2 py-1 rounded shadow-sm border border-slate-200">
+                                                <IconTrash size={12} /> Clear Pad
+                                            </button>
+                                        </label>
+                                        <SignaturePad onReady={setSignaturePadAPI} />
+                                        <p className="text-[10px] text-slate-400 font-medium">Signature is securely logged as encrypted text data.</p>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Submit Actions */}
+                            <div className="pt-2 flex flex-col sm:flex-row gap-4">
+                                <button type="button" onClick={clearForm} className="w-full sm:w-1/3 px-6 py-4 rounded-xl font-bold text-slate-600 bg-slate-100 border border-slate-200 hover:bg-slate-200 transition-all">
+                                    Reset Form
+                                </button>
+                                <button type="submit" disabled={isSubmitting} className={`w-full sm:w-2/3 flex items-center justify-center gap-2 px-6 py-4 rounded-xl font-bold text-white transition-all shadow-lg ${isSubmitting ? 'bg-teal-400 cursor-not-allowed' : 'medical-gradient hover:shadow-xl hover:-translate-y-0.5 active:translate-y-0'}`}>
+                                    {isSubmitting ? <><IconRefresh size={20} className="animate-spin" /> Processing Data...</> : <><IconSend size={20} /> Submit Official Record</>}
                                 </button>
                             </div>
                         </form>
                     </div>
-                    <p className="text-center text-xs text-slate-400 mt-6 font-medium">Securely Integrated with TDMH Workspace</p>
+
+                    <div className="mt-8 text-center">
+                        <p className="text-xs text-slate-400 font-medium uppercase tracking-widest">
+                            Securely Integrated with TDMH Workspace
+                        </p>
+                    </div>
                 </div>
             );
         }
